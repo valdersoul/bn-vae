@@ -10,7 +10,7 @@ from torch import nn, optim
 
 from data import MonoTextData
 from modules import VAE
-from modules import GaussianLSTMEncoder, LSTMDecoder
+from modules import GaussianLSTMEncoder, LSTMDecoder, DeltaGaussianLSTMEncoder, VMFLSTMEncoder
 
 from exp_utils import create_exp_dir
 from utils import uniform_initializer, xavier_normal_initializer, calc_iwnll, calc_mi, calc_au, sample_sentences, visualize_latent, reconstruct
@@ -24,7 +24,8 @@ logging = None
 
 def init_config():
     parser = argparse.ArgumentParser(description='VAE mode collapse study')
-
+    parser.add_argument('--gamma', type=float, default=0.0)
+    parser.add_argument('--cycle', type=int, default=0)
     # model hyperparameters
     parser.add_argument('--dataset', type=str, required=True, help='dataset to use')
     # optimization parameters
@@ -66,9 +67,15 @@ def init_config():
     parser.add_argument("--lr", type=float, default=1.)
 
     parser.add_argument("--fb", type=int, default=0,
-                         help="0: no fb; 1: fb; 2: max(target_kl, kl) for each dimension")
+                         help="0: no fb; 1: fb; 2: max(target_kl, kl) for each dimension; 3:delta-vae, 4:vmf-vae")
     parser.add_argument("--target_kl", type=float, default=-1,
                          help="target kl of the free bits trick")
+    
+    parser.add_argument("--noise_reconstruct", action="store_true", default=False)
+
+    parser.add_argument("--swap_num", type=int, default=1)
+
+    parser.add_argument("--delta", type=float, default=0.15)
 
     args = parser.parse_args()
 
@@ -97,7 +104,9 @@ def init_config():
     elif args.fb == 2:
         fb_str = "_fbdim"
     elif args.fb == 3:
-        fb_str = "_fb3"
+        fb_str = "_delta"
+    elif args.fb == 4:
+        fb_str = '_vmf'
 
     # set load and save paths
     if args.exp_dir == None:
@@ -172,6 +181,9 @@ def main(args):
 
     opt_dict = {"not_improved": 0, "lr": 1., "best_loss": 1e4}
 
+    device = "cuda" if args.cuda else "cpu"
+    args.device = device
+
     train_data = MonoTextData(args.train_data, label=args.label)
 
     vocab = train_data.vocab
@@ -191,10 +203,15 @@ def main(args):
     emb_init = uniform_initializer(0.1)
 
     #device = torch.device("cuda" if args.cuda else "cpu")
-    device = "cuda" if args.cuda else "cpu"
-    args.device = device
 
-    if args.enc_type == 'lstm':
+
+    if args.fb == 3:
+        encoder = DeltaGaussianLSTMEncoder(args, vocab_size, model_init, emb_init)
+        args.enc_nh = args.dec_nh
+    elif args.fb == 4:
+        encoder = VMFLSTMEncoder(args, vocab_size, model_init, emb_init)
+        args.enc_nh = args.dec_nh
+    elif args.enc_type == 'lstm':
         encoder = GaussianLSTMEncoder(args, vocab_size, model_init, emb_init)
         args.enc_nh = args.dec_nh
     else:
@@ -207,10 +224,12 @@ def main(args):
         loaded_state_dict = torch.load(args.load_path)
         #curr_state_dict = vae.state_dict()
         #curr_state_dict.update(loaded_state_dict)
-        vae.load_state_dict(loaded_state_dict)
+        vae.load_state_dict(loaded_state_dict, strict=False)
         logging("%s loaded" % args.load_path)
 
         if args.reset_dec:
+            if args.gamma > 0:
+                vae.encoder.reset_parameters(model_init, emb_init,reset=True)
             logging("\n-------reset decoder-------\n")
             vae.decoder.reset_parameters(model_init, emb_init)
 
@@ -249,6 +268,35 @@ def main(args):
             reconstruct(vae, test_data_batch, vocab, args.decoding_strategy, args.reconstruct_to)
 
         return
+    
+    if args.noise_reconstruct:
+        logging('begin noisy reconstruction')
+        vae.load_state_dict(torch.load(args.load_path))
+        vae.eval()
+        report_kl_loss = report_rec_loss = report_loss = 0
+        report_num_words = report_num_sents = 0
+        with torch.no_grad():
+                x_data_batch, y_data_batch = test_data.swap_data_sample(500, args.swap_num, device,batch_first=True,shuffle=True)
+                
+                for i in np.random.permutation(len(x_data_batch)):
+                    x_batch = x_data_batch[i]
+                    y_batch = y_data_batch[i]
+                    batch_size = x_batch.size(0)
+
+                    # not predict start symbol
+                    report_num_sents += batch_size
+                   
+                    loss, loss_rc, loss_kl = vae.rc_loss(x_batch, y_batch,1.0, nsamples=args.nsamples)
+                    
+                    loss_rc = loss_rc.sum()
+
+                    report_rec_loss += loss_rc.item()
+                
+                print(report_rec_loss / report_num_sents)
+        
+        return
+
+
 
     if args.opt == "sgd":
         enc_optimizer = optim.SGD(vae.encoder.parameters(), lr=args.lr, momentum=args.momentum)
@@ -298,6 +346,9 @@ def main(args):
 
                 batch_data = train_data_batch[i]
                 batch_size, sent_len = batch_data.size()
+                
+                if batch_data.size(0) < 2:
+                    continue
 
                 # not predict start symbol
                 report_num_words += (sent_len - 1) * batch_size
@@ -305,11 +356,15 @@ def main(args):
 
                 kl_weight = min(1.0, kl_weight + anneal_rate)
 
+                if args.cycle > 0 and (epoch -1 ) % args.cycle == 0:
+                    kl_weight = args.kl_start
+                    print('KL Annealing restart!')
+                  
                 enc_optimizer.zero_grad()
                 dec_optimizer.zero_grad()
 
                 
-                if args.fb == 0:
+                if args.fb == 0 or args.fb == 4:
                     loss, loss_rc, loss_kl = vae.loss(batch_data, kl_weight, nsamples=args.nsamples)
                 elif args.fb == 1:
                     loss, loss_rc, loss_kl = vae.loss(batch_data, kl_weight, nsamples=args.nsamples)
@@ -325,8 +380,6 @@ def main(args):
                     loss = loss_rc + kl_weight * fake_loss_kl 
                 elif args.fb == 3:
                     loss, loss_rc, loss_kl = vae.loss(batch_data, kl_weight, nsamples=args.nsamples)
-                    kl_mask = (loss_kl.mean() > args.target_kl).float()
-                    loss = loss_rc + kl_mask * kl_weight * loss_kl 
 
                 loss = loss.mean(dim=-1)
 

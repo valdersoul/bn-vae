@@ -16,7 +16,7 @@ args = parser.parse_args()
 
 np.random.seed(args.seed)
 
-data_dir = os.path.join("datasets/{}_data".format(args.dataset))
+data_dir = os.path.join("../datasets/{}_data".format(args.dataset))
 fout = open(os.path.join(data_dir, "{}.train.{}.txt".format(args.dataset, args.num_label)), "w")
 
 if args.split_even:

@@ -12,7 +12,7 @@ parser.add_argument('--pca_num', type=int, default=0)
 parser.add_argument('--one2one', action="store_true", default=False)
 
 args = parser.parse_args()
-
+np.random.seed(7834)
 gmm = GaussianMixture(n_components=args.num, tol=1e-3, max_iter=200, n_init=1, verbose=1)
 
 if args.pca_num > 0:

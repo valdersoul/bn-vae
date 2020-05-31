@@ -216,7 +216,7 @@ class MonoTextData(object):
         assert(total == len(self.data))
         return batch_data_list, batch_label_list
 
-    def create_data_batch(self, batch_size, device, batch_first=False):
+    def create_data_batch(self, batch_size, device, batch_first=False,data=None):
         """pad data with start and stop symbol, batching is performerd w.r.t.
         the sentence length, so that each returned batch has the same length,
         no further pack sequence function (e.g. pad_packed_sequence) is required
@@ -224,7 +224,9 @@ class MonoTextData(object):
             List: a list of batched data, each element is a tensor with shape
                 (seq_len, batch_size)
         """
-        sents_len = np.array([len(sent) for sent in self.data])
+        if not data:
+            data = self.data
+        sents_len = np.array([len(sent) for sent in data])
         sort_idx = np.argsort(sents_len)
         sort_len = sents_len[sort_idx]
 
@@ -243,7 +245,7 @@ class MonoTextData(object):
                 batch_data = []
                 next = min(curr + batch_size, idx)
                 for id_ in range(curr, next):
-                    batch_data.append(self.data[sort_idx[id_]])
+                    batch_data.append(data[sort_idx[id_]])
                 curr = next
                 batch_data, sents_len = self._to_tensor(batch_data, batch_first, device)
                 batch_data_list.append(batch_data)
@@ -251,7 +253,7 @@ class MonoTextData(object):
                 total += batch_data.size(0)
                 assert(sents_len == ([sents_len[0]] * len(sents_len)))
 
-        assert(total == len(self.data))
+        assert(total == len(data))
         return batch_data_list
 
 
@@ -277,3 +279,40 @@ class MonoTextData(object):
         batch_data, sents_len = self._to_tensor(batch_data, batch_first, device)
 
         return batch_data, sents_len
+    
+    def swap_data_sample(self, nsample, n_swap, device,batch_first=False, shuffle=True):
+        index_arr = np.arange(len(self.data))
+        batch_data = [self.data[index] for index in index_arr if len(self.data[index]) > 2 * n_swap]
+        index_arr = np.arange(len(batch_data))
+        if shuffle:
+            np.random.shuffle(index_arr)
+
+        batch_ids = index_arr[: nsample]
+        batch_data = [batch_data[index] for index in batch_ids]
+
+        def swap(data, n_swap):
+            import copy
+            data = copy.deepcopy(data)
+            import random
+            i = j = 0
+            l_range = [i for i in range(len(data))]
+            for index in range(n_swap):
+                i = random.choice(l_range)
+                l_range.remove(i)
+                j = random.choice(l_range)
+                l_range.remove(j)
+                data[i], data[j] = data[j], data[i]
+            return data
+    
+        s_batch_data = []
+        for d in batch_data:
+            s_batch_data.append(swap(d,n_swap))
+
+        assert(batch_data[0] != s_batch_data[0] )
+        
+        y = self.create_data_batch( 32, device, batch_first=True,data=batch_data)
+        x = self.create_data_batch( 32, device, batch_first=True,data=s_batch_data)
+        
+        return x, y
+
+

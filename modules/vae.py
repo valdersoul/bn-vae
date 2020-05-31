@@ -97,6 +97,11 @@ class VAE(nn.Module):
 
 
         return reconstruct_err + kl_weight * KL, reconstruct_err, KL
+    
+    def rc_loss(self,x,y,kl_weight,nsamples=1):
+        z, KL = self.encode(x, nsamples)
+        reconstruct_err = self.decoder.reconstruct_error(y, z).mean(dim=1)
+        return reconstruct_err + kl_weight * KL, reconstruct_err, KL
 
 
     def loss_iw(self, x, kl_weight, nsamples=50, ns=10):

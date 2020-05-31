@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from data import MonoTextData, VocabEntry
 from modules import VAE, LinearDiscriminator, MLPDiscriminator
-from modules import GaussianLSTMEncoder, LSTMDecoder, DeltaGaussianLSTMEncoder
+from modules import GaussianLSTMEncoder, LSTMDecoder
 
 from exp_utils import create_exp_dir
 from utils import uniform_initializer, xavier_normal_initializer, calc_iwnll, calc_mi, calc_au, sample_sentences, visualize_latent, reconstruct
@@ -35,7 +35,6 @@ def init_config():
     parser = argparse.ArgumentParser(description='VAE mode collapse study')
     parser.add_argument('--gamma', type=float, default=0.0)
     # model hyperparameters
-    parser.add_argument('--delta', type=float, default=0.15)
     parser.add_argument('--dataset', type=str, required=True, help='dataset to use')
     # optimization parameters
     parser.add_argument('--momentum', type=float, default=0, help='sgd momentum')
@@ -95,15 +94,8 @@ def init_config():
     args.cuda = torch.cuda.is_available()
 
     # set seeds
-    # seed_set = [783435, 101, 202, 303, 404, 505, 606, 707, 808, 909]
-    # args.seed = seed_set[args.taskid]
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    if args.cuda:
-        torch.cuda.manual_seed(args.seed)
-        torch.backends.cudnn.deterministic = True
-
-    # load config file into args
+    
+        # load config file into args
     config_file = "config.config_%s" % args.dataset
     if args.num_label == 10:
         params = importlib.import_module(config_file).params_ss_10
@@ -193,13 +185,19 @@ def test(model, test_data_batch, test_labels_batch, mode, args, verbose=True):
     return test_loss, acc
 
 
-def main(args):
+def run(args):
     global logging
     logging = create_exp_dir(args.exp_dir, scripts_to_save=[])
 
     if args.cuda:
         logging('using cuda')
     logging(str(args))
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if args.cuda:
+        torch.cuda.manual_seed(args.seed)
+        torch.backends.cudnn.deterministic = True
 
     opt_dict = {"not_improved": 0, "lr": 1., "best_loss": 1e4}
 
@@ -231,10 +229,7 @@ def main(args):
     device = "cuda" if args.cuda else "cpu"
     args.device = device
 
-    if args.fb == 3:
-        encoder = DeltaGaussianLSTMEncoder(args, vocab_size, model_init, emb_init)
-        args.enc_nh = args.dec_nh
-    elif args.enc_type == 'lstm':
+    if args.enc_type == 'lstm':
         encoder = GaussianLSTMEncoder(args, vocab_size, model_init, emb_init)
         args.enc_nh = args.dec_nh
     else:
@@ -373,7 +368,7 @@ def main(args):
             iter_ += 1
 
         logging('lr {}'.format(opt_dict["lr"]))
-        print(report_num_sents)
+
         discriminator.eval()
 
         with torch.no_grad():
@@ -426,7 +421,19 @@ def main(args):
     with torch.no_grad():
         loss, acc = test(discriminator, test_data_batch, test_labels_batch, "TEST", args)
         # print(au_var)
+    
+    return acc
 
 if __name__ == '__main__':
     args = init_config()
-    main(args)
+    seed_set = [783435, 101, 202, 303, 404, 505, 606, 707, 808, 909]
+    acc = []
+    for s in seed_set:
+        args.seed = s
+    # seed_set = [783435, 101, 202, 303, 404, 505, 606, 707, 808, 909]
+    # args.seed = seed_set[args.taskid]
+        acc.append(run(args))
+    
+    print(acc)
+    print(np.array(acc).mean())
+    print(np.array(acc).std())

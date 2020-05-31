@@ -29,7 +29,7 @@ max_decay = 5
 
 def init_config():
     parser = argparse.ArgumentParser(description='VAE mode collapse study')
-
+    parser.add_argument('--gamma', type=float, default=0.0)
     # model hyperparameters
     parser.add_argument('--dataset', type=str, required=True, help='dataset to use')
     # optimization parameters
@@ -219,6 +219,7 @@ def main(args):
                                                     batch_first=True)
 
         print("getting  vectors for training")
+        print(args.save_dir)
         save_latents(args, vae, train_data_batch, train_batch_labels, "train")
         print("getting  vectors for validating")
         save_latents(args, vae, val_data_batch, val_batch_labels, "val")
