@@ -342,6 +342,10 @@ def main(args):
             report_kl_loss = report_rec_loss = report_loss = 0
             report_num_words = report_num_sents = 0
 
+            if args.cycle > 0 and (epoch -1 ) % args.cycle == 0:
+                kl_weight = args.kl_start
+                print('KL Annealing restart!')
+            
             for i in np.random.permutation(len(train_data_batch)):
 
                 batch_data = train_data_batch[i]
@@ -355,10 +359,6 @@ def main(args):
                 report_num_sents += batch_size
 
                 kl_weight = min(1.0, kl_weight + anneal_rate)
-
-                if args.cycle > 0 and (epoch -1 ) % args.cycle == 0:
-                    kl_weight = args.kl_start
-                    print('KL Annealing restart!')
                   
                 enc_optimizer.zero_grad()
                 dec_optimizer.zero_grad()
